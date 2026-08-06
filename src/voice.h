@@ -12,6 +12,14 @@ SoftwareSerial Serial2(8, 9);  //Rx, Tx
 
 #define SERIAL2_BAUD_RATE 9600  // 9600 for Petoi Voice Command Module
 #define MAX_CUSTOMIZED_CMD 10
+#define VOICE_RESPONSE_MUTED 0xA5
+#define VOICE_RESPONSE_ENABLED 0x5A
+// #define VOICE_EEPROM_DEBUG  //comment out after EEPROM persistence is verified
+
+// The voice module needs several seconds to accept commands after a true cold boot.
+// Opening the USB serial port resets only the main board, so a shorter delay can
+// appear to work even though it fails after both boards lose power.
+#define VOICE_RESTORE_DELAY 1000
 
 // Speak "start learning" to record your voice commands in order. You can record up to 10 voice commands
 // Speak "stop learning" to stop in the middle
@@ -67,11 +75,80 @@ const char *const voiceTable[] PROGMEM = {
 };
 int listLength = 0;
 bool enableVoiceQ = true;
+bool motionOnlyVoiceQ = false;
+bool voiceRestorePendingQ = false;
+unsigned long voiceRestoreTimer = 0;
+
+#ifdef VOICE_EEPROM_DEBUG
+void printVoiceEepromHex(byte value) {
+  if (value < 0x10)
+    PT('0');
+  PT_FMT(value, HEX);
+}
+
+void verifyVoiceEepromWrite(byte expected) {
+  byte actual = EEPROM.read(VOICE_RESPONSE_STATE);
+  PTF("expected=0x");
+  printVoiceEepromHex(expected);
+  PTF(", readback=0x");
+  printVoiceEepromHex(actual);
+  if (actual == expected)
+    PTLF(" [OK]");
+  else
+    PTLF(" [FAILED]");
+}
+#endif
+
+void scheduleVoiceResponseRestore() {
+  voiceRestorePendingQ = true;
+  voiceRestoreTimer = millis();
+}
+
+void serviceVoiceResponseRestore() {
+  if (!voiceRestorePendingQ || millis() - voiceRestoreTimer < VOICE_RESTORE_DELAY)
+    return;
+
+  // This voice-module version does not return a reliable C/D acknowledgement.
+  // Send once after its cold-start delay and do not repeat the audible response.
+  voiceRestorePendingQ = false;
+  Serial2.print('X');
+  Serial2.println(motionOnlyVoiceQ ? "Ad" : "Ac");
+#ifdef VOICE_EEPROM_DEBUG
+  PTF("[Voice Restore] sent once: ");
+  if (motionOnlyVoiceQ)
+    PTLF("XAd");
+  else
+    PTLF("XAc");
+#endif
+}
 
 void voiceSetup() {
   PTLF("Init voice");
   Serial2.begin(SERIAL2_BAUD_RATE);
   Serial2.setTimeout(5);
+
+  byte savedVoiceResponseState = EEPROM.read(VOICE_RESPONSE_STATE);
+  motionOnlyVoiceQ = savedVoiceResponseState == VOICE_RESPONSE_MUTED;
+  enableVoiceQ = true;
+
+#ifdef VOICE_EEPROM_DEBUG
+  PTF("[Voice EEPROM] boot: address=");
+  PT(VOICE_RESPONSE_STATE);
+  PTF(", raw=0x");
+  printVoiceEepromHex(savedVoiceResponseState);
+  PTL();
+  if (savedVoiceResponseState == VOICE_RESPONSE_MUTED)
+    PTLF("[Voice EEPROM] restore XAM: motion=ON, voice=OFF");
+  else if (savedVoiceResponseState == VOICE_RESPONSE_ENABLED)
+    PTLF("[Voice EEPROM] restore XAm: motion=ON, voice=ON");
+  else
+    PTLF("[Voice EEPROM] invalid/uninitialized: default XAm");
+#endif
+
+  // A cold-started voice module may not be ready yet. Restore asynchronously
+  // and retry until its acknowledgement is received.
+  scheduleVoiceResponseRestore();
+
   listLength = min(sizeof(voiceTable) / sizeof(voiceTable[0]), MAX_CUSTOMIZED_CMD);
   PTLF("Customized voice:");
   PTL(listLength);
@@ -82,6 +159,8 @@ void set_voice() {  // send some control command directly to the module
                     // XAb: switch Chinese
                     // XAc: turn on the sound response
                     // XAd: turn off the sound response
+                    // XAM: mute the sound response but keep motion reactions enabled
+                    // XAm: unmute the sound response and keep motion reactions enabled
                     // XAe: start learning
                     // XAf: stop learning
                     // XAg: clear the learning data
@@ -91,30 +170,60 @@ void set_voice() {  // send some control command directly to the module
   newCmd[c - 1] = '\0';
   // Serial.print('X');
   // Serial.println(newCmd);
+  const char *moduleCmd = newCmd;
+  bool motionOnlyModeCmd = false;
+  if (!strcmp(newCmd, "AM")) {
+    moduleCmd = "Ad";  //translate XAM to the module's mute command
+    motionOnlyModeCmd = true;
+    motionOnlyVoiceQ = true;
+    EEPROM.update(VOICE_RESPONSE_STATE, VOICE_RESPONSE_MUTED);
+#ifdef VOICE_EEPROM_DEBUG
+    PTF("[Voice EEPROM] XAM write: ");
+    verifyVoiceEepromWrite(VOICE_RESPONSE_MUTED);
+#endif
+  } else if (!strcmp(newCmd, "Am")) {
+    moduleCmd = "Ac";  //translate XAm to the module's unmute command
+    motionOnlyModeCmd = true;
+    motionOnlyVoiceQ = false;
+    EEPROM.update(VOICE_RESPONSE_STATE, VOICE_RESPONSE_ENABLED);
+#ifdef VOICE_EEPROM_DEBUG
+    PTF("[Voice EEPROM] XAm write: ");
+    verifyVoiceEepromWrite(VOICE_RESPONSE_ENABLED);
+#endif
+  }
   Serial2.print('X');
-  Serial2.println(newCmd);
+  Serial2.println(moduleCmd);
   while (Serial2.available() && Serial2.read())
     ;
-  if (!strcmp(newCmd, "Ac"))  // enter "XAc" in the serial monitor or add button "X65,99" in the mobile app to enable voice reactions
+  if (motionOnlyModeCmd)
+    enableVoiceQ = true;  //muting module audio must not disable motion reactions
+  else if (!strcmp(newCmd, "Ac")) {  // enter "XAc" in the serial monitor or add button "X65,99" in the mobile app to enable voice reactions
                               // 在串口监视器输入指令“XAc”或在手机app创建按键"X65,99"来激活语音动作
+    motionOnlyVoiceQ = false;
     enableVoiceQ = true;
-  else if (!strcmp(newCmd, "Ad"))  // enter "XAd" in the serial monitor or add button "X65,100" in the mobile app to disable voice reactions
+  } else if (!strcmp(newCmd, "Ad")) {  // enter "XAd" in the serial monitor or add button "X65,100" in the mobile app to disable voice reactions
                                    // 在串口监视器输入指令“XAd”或在手机app创建按键"X65,100"来禁用语音动作
+    motionOnlyVoiceQ = false;
     enableVoiceQ = false;
+  }
   PTL(token);
   resetCmd();
 }
 void read_voice() {
+  serviceVoiceResponseRestore();
   if (Serial2.available()) {
     String raw = Serial2.readStringUntil('\n');
+    if (raw.length() < 3)
+      return;
     // PTL(raw);
     byte index = (byte)raw[2];  //interpret the 3rd byte as integer
     int shift = -1;
-    if (index == 67)  //say "play sound" to enable voice reactions / 说“打开音效”激活语音动作
+    if (index == 'C' || index == 'c') {  //module ACK or "play sound" command
+      motionOnlyVoiceQ = false;
       enableVoiceQ = true;
-    else if (index == 68)  //say "be quiet" to disable voice reactions / 说“安静点”禁用语音动作
-      enableVoiceQ = false;
-    else if (index > 10) {
+    } else if (index == 'D' || index == 'd') {  //module ACK or "be quiet" command
+      enableVoiceQ = motionOnlyVoiceQ;
+    } else if (index > 10 && index < 61) {
       if (index < 21) {  //11 ~ 20 are customized commands, and their indexes should be shifted by 11
         index -= 11;
         PT(index);

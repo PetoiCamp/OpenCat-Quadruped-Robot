@@ -203,6 +203,7 @@ byte pwm_pin[] = { 12, 11, 4, 3,
 #define SERIAL_BUFF 278               // 2 bytes
 #define SERIAL_BUFF_RAND 280          // 2 bytes
 #define BOOTUP_SOUND_STATE 282        // 1 byte
+#define VOICE_RESPONSE_STATE 283       // 1 byte: persistent XAM/XAm mode
 #define SKILLS 320                    // 1 byte for skill name length, followed by the char array for skill name
 // then followed by i(nstinct) on progmem, or n(ewbility) on progmem
 
