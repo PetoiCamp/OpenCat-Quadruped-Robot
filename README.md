@@ -192,7 +192,7 @@ Infrared remote, Petoi app, Python, or Serial Monitor. [Full play guide →](htt
 
 ## Education
 
-OpenCat shows up in **AI robotics education** across K-12 programs, community colleges, university labs, and maker spaces — hands-on **physical AI** teaching that goes beyond screen-based coding exercises:
+OpenCat shows up in **AI robotics education** across K-12 programs, community colleges, university labs, and maker spaces — hands-on **[physical AI](https://www.petoi.com/pages/quadruped-physical-ai?utm_source=github&utm_medium=code&utm_campaign=github-opencat&utm_content=readme-physical-ai)** teaching that goes beyond screen-based coding exercises:
 
 - [Robotics education showcases](https://www.petoi.com/blogs/blog/tagged/showcase+education?utm_source=github&utm_medium=code&utm_campaign=github-opencat)
 - [STEM & robotics curriculum resources](https://www.petoi.com/pages/resources-curriculum-stem-coding-robot?utm_source=github&utm_medium=code&utm_campaign=github-opencat)
